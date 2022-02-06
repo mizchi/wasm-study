@@ -1,0 +1,22 @@
+(module
+  (import "env" "print_string" (func $print_string (param i32)))
+  (import "env" "buffer" (memory 1))
+  (global $start_string (import "env" "start_string") i32)
+  (global $string_len i32 (i32.const 12))
+  (data (global.get $start_string) "hello world!")
+  (func (export "helloworld")
+    (call $print_string (global.get $string_len))
+  )
+  (func (export "addInt") (param $value_1 i32) (param $value_2 i32) (result i32)
+    (local.get $value_1)
+    (local.get $value_2)
+    (i32.add)
+  )
+  (func (export "sumSquared") (param $value_1 i32) (param $value_2 i32) (result i32)
+    (local $sum i32)
+    (i32.add (local.get $value_1) (local.get $value_2))
+    local.set $sum
+    (i32.mul (local.get $sum) (local.get $sum))
+  )
+
+)

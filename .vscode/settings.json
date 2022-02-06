@@ -1,9 +1,14 @@
 {
+  "editor.bracketPairColorization.enabled": true,
   "deno.enable": true,
   "deno.lint": true,
   "deno.unstable": true,
   "[typescript]": {
     "editor.formatOnSave": true,
     "editor.defaultFormatter": "denoland.vscode-deno"
+  },
+  "[wat]": {
+    "editor.formatOnSave": true,
   }
+
 }
