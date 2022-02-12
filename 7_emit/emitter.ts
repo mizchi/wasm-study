@@ -122,73 +122,41 @@ export function encodeString(str: string): Uint8Array {
   ]);
 }
 
-function createTypeSection(data: number[]) {
-  return [
-    Section.type,
-    ...vec(data),
-  ];
-}
-
-function createExportSection(data: number[]) {
-  return [
-    Section.export,
-    ...vec(data),
-  ];
-}
-
-function createCodeSection(data: number[]) {
-  return [
-    Section.code,
-    ...vec(data),
-  ];
-}
-
+type Vec = number[];
 type TypeExpr = [
   type: Type.Func,
-  ...xs: number[],
+  ...xs: Vec,
 ];
-type FuncExpr = number[];
-type ExportExpr = number[];
-type CodeExpr = number[];
+type FuncExpr = Vec;
+type ExportExpr = Vec;
+type CodeExpr = Vec;
 
 const emit = () => {
   const types: Array<TypeExpr> = [];
   const funcs: Array<FuncExpr> = [];
   const exports: Array<ExportExpr> = [];
 
-  function addType(t: TypeExpr) {
+  function addType(expr: TypeExpr) {
     const idx = types.length;
-    types.push(t);
+    types.push(expr);
     return idx;
   }
 
-  function addFunc(t: number[]) {
+  function addFunc(params: Array<Val>, returns: Array<Val>) {
     const idx = funcs.length;
-    funcs.push(t);
+    const typeRef = addType([Type.Func, ...vec(params), ...vec(returns)]);
+    funcs.push([typeRef]);
     return idx;
   }
 
-  function addExport(t: number[]) {
+  function addExport(name: string, funcRef: number) {
     const idx = exports.length;
-    exports.push(t);
+    exports.push([...encodeString(name), ExportType.func, funcRef]);
     return idx;
   }
 
-  const addFuncTypeRef = addType([
-    Type.Func,
-    ...vec([Val.f32, Val.f32]),
-    ...vec([Val.f32]),
-  ]);
-  const addFuncRef = addFunc([addFuncTypeRef]);
-
-  // the export section is a vector of exported functions
-  const runExport = [
-    ...encodeString("run"),
-    ExportType.func,
-    addFuncRef, /* function index */
-  ];
-
-  addExport(runExport);
+  const addFuncRef = addFunc([Val.f32, Val.f32], [Val.f32]);
+  addExport("run", addFuncRef);
 
   const code = [
     Op.local_get,
