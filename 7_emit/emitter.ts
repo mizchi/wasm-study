@@ -3,13 +3,11 @@ import {
   equal,
 } from "https://deno.land/std@0.122.0/testing/asserts.ts";
 
-// Constants
-
-const MAGIC_MODULE_HEADER = [0x00, 0x61, 0x73, 0x6d];
-const MODULE_VERSION = [0x01, 0x00, 0x00, 0x00];
-
-const functionType = 0x60;
 const emptyArray = 0x0;
+
+enum Type {
+  Func = 0x60,
+}
 
 enum Op {
   end = 0x0b,
@@ -75,9 +73,11 @@ export function unsignedLEB128(n: number): number[] {
 
 // https://webassembly.github.io/spec/core/syntax/types.html#vector-types
 // vector は整数、浮動小数点によらない何らかの数値型
-function encodeVector(data: any): any[] {
+function vec(data: any): number[] {
   return [
+    // データ長
     ...unsignedLEB128(data.length),
+    // 実体
     ...data.flat(Infinity),
   ];
 }
@@ -108,7 +108,7 @@ export function signedLEB128(n: number) {
 }
 
 Deno.test("signedLEB128", () => {
-  console.log("xxxx", signedLEB128(64));
+  // console.log("xxxx", signedLEB128(64));
   assert(equal(signedLEB128(0), [0]));
   assert(equal(signedLEB128(1), [1]));
   assert(equal(signedLEB128(63), [63]));
@@ -122,60 +122,73 @@ export function encodeString(str: string): Uint8Array {
   ]);
 }
 
-type FunctionType = [t: typeof functionType, ...rest: BinaryArray];
-
 function createTypeSection(data: number[]) {
   return [
     Section.type,
-    ...encodeVector(data),
-  ];
-}
-
-function createFuncSection(data: number[]) {
-  return [
-    Section.func,
-    ...encodeVector(data),
+    ...vec(data),
   ];
 }
 
 function createExportSection(data: number[]) {
   return [
     Section.export,
-    ...encodeVector(data),
+    ...vec(data),
   ];
 }
 
 function createCodeSection(data: number[]) {
   return [
     Section.code,
-    ...encodeVector(data),
+    ...vec(data),
   ];
 }
 
+type TypeExpr = [
+  type: Type.Func,
+  ...xs: number[],
+];
+type FuncExpr = number[];
+type ExportExpr = number[];
+type CodeExpr = number[];
+
 const emit = () => {
-  const addFunctionType: BinaryArray = [
-    functionType,
-    ...encodeVector([Val.f32, Val.f32]),
-    ...encodeVector([Val.f32]),
-  ];
+  const types: Array<TypeExpr> = [];
+  const funcs: Array<FuncExpr> = [];
+  const exports: Array<ExportExpr> = [];
 
-  // the type section is a vector of function types
-  const typeSection = createTypeSection(
-    encodeVector([addFunctionType]),
-  );
+  function addType(t: TypeExpr) {
+    const idx = types.length;
+    types.push(t);
+    return idx;
+  }
 
-  // the function section is a vector of type indices that indicate the type of each function
-  // in the code section
-  const funcSection = createFuncSection(
-    encodeVector([0x00 /* type index */]),
-  );
+  function addFunc(t: number[]) {
+    const idx = funcs.length;
+    funcs.push(t);
+    return idx;
+  }
+
+  function addExport(t: number[]) {
+    const idx = exports.length;
+    exports.push(t);
+    return idx;
+  }
+
+  const addFuncTypeRef = addType([
+    Type.Func,
+    ...vec([Val.f32, Val.f32]),
+    ...vec([Val.f32]),
+  ]);
+  const addFuncRef = addFunc([addFuncTypeRef]);
 
   // the export section is a vector of exported functions
-  const exportSection = createExportSection(
-    encodeVector([
-      [...encodeString("run"), ExportType.func, 0x00 /* function index */],
-    ]),
-  );
+  const runExport = [
+    ...encodeString("run"),
+    ExportType.func,
+    addFuncRef, /* function index */
+  ];
+
+  addExport(runExport);
 
   const code = [
     Op.local_get,
@@ -185,23 +198,39 @@ const emit = () => {
     Op.f32_add,
   ];
 
-  const functionBody = encodeVector([
-    emptyArray, /** locals */
-    ...code,
-    Op.end,
-  ]);
-
-  const codeSection = createCodeSection(
-    encodeVector([functionBody]),
+  const codes: Array<CodeExpr> = [];
+  function addCode(t: number[]) {
+    const idx = codes.length;
+    codes.push(t);
+    return idx;
+  }
+  addCode(
+    vec([
+      emptyArray, /** locals */
+      ...code,
+      Op.end,
+    ]),
   );
 
   return Uint8Array.from([
-    ...MAGIC_MODULE_HEADER,
-    ...MODULE_VERSION,
-    ...typeSection,
-    ...funcSection,
-    ...exportSection,
-    ...codeSection,
+    // MAGIC_MODULE_HEADER
+    ...[0x00, 0x61, 0x73, 0x6d],
+    // MODULE_VERSION
+    ...[0x01, 0x00, 0x00, 0x00],
+    // Type Section
+    Section.type,
+    ...vec(vec(types)),
+    // Func Section
+    Section.func,
+    ...vec(vec(funcs)),
+    // Export Section
+    Section.export,
+    ...vec(vec(exports)),
+    // Code Section
+    Section.code,
+    ...vec(
+      vec(codes),
+    ),
   ]);
 };
 
