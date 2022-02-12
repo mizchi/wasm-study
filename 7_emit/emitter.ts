@@ -115,11 +115,8 @@ Deno.test("signedLEB128", () => {
   assert(equal(signedLEB128(64), [192, 0]));
 });
 
-export function encodeString(str: string): Uint8Array {
-  return new Uint8Array([
-    str.length,
-    ...Array.from(str).map((s) => s.charCodeAt(0)),
-  ]);
+export function encodeString(str: string): number[] {
+  return [str.length, ...Array.from(str).map((s) => s.charCodeAt(0))];
 }
 
 type Vec = number[];
@@ -130,76 +127,135 @@ type TypeExpr = [
 type FuncExpr = Vec;
 type ExportExpr = Vec;
 type CodeExpr = Vec;
+type ImportExpr = Vec;
+type Ptr<T> = number & { __type__: T };
+
+// AST Builder
+function emitter() {
+  const _types: Array<TypeExpr> = [];
+  const _funcs: Array<FuncExpr> = [];
+  const _imports: Array<ImportExpr> = [];
+  const _exports: Array<ExportExpr> = [];
+  const _codes: Array<CodeExpr> = [];
+
+  function _build() {
+    return Uint8Array.from([
+      // MAGIC_MODULE_HEADER
+      ...[0x00, 0x61, 0x73, 0x6d],
+      // MODULE_VERSION
+      ...[0x01, 0x00, 0x00, 0x00],
+      // Type Section
+      Section.type,
+      ...vec(vec(_types)),
+      // Import Section
+      Section.import,
+      ...vec(vec(_imports)),
+      // Func Section
+      Section.func,
+      ...vec(vec(_funcs)),
+      // Export Section
+      Section.export,
+      ...vec(vec(_exports)),
+      // Code Section
+      Section.code,
+      ...vec(
+        vec(_codes),
+      ),
+    ]);
+  }
+
+  function _addType(expr: TypeExpr) {
+    const idx = _types.length;
+    _types.push(expr);
+    return idx as Ptr<Section.type>;
+  }
+
+  function _funcType(
+    params: Array<Val>,
+    results: Array<Val>,
+  ) {
+    return _addType([
+      Type.Func,
+      ...vec(params),
+      ...vec(results),
+    ]) as Ptr<
+      Section.type
+    >;
+  }
+
+  function _func(typePtr: Ptr<Section.type>, code: CodeExpr) {
+    const ptr = _funcs.length;
+    _funcs.push([typePtr]);
+    _codes.push(vec(code));
+    return ptr as Ptr<Section.func>;
+  }
+
+  function _export(name: string, funcPtr: Ptr<Section.func>) {
+    const idx = _exports.length;
+    _exports.push([...encodeString(name), ExportType.func, funcPtr]);
+    return idx as Ptr<Section.export>;
+  }
+
+  function _import(ns: string, name: string, typePtr: Ptr<Section.type>) {
+    const ptr = _imports.length;
+    _imports.push([
+      ...encodeString(ns),
+      ...encodeString(name),
+      ExportType.func,
+      typePtr,
+    ]);
+    return ptr;
+  }
+  return {
+    export: _export,
+    import: _import,
+    func: _func,
+    funcType: _funcType,
+    build: _build,
+  };
+}
 
 const emit = () => {
-  const types: Array<TypeExpr> = [];
-  const funcs: Array<FuncExpr> = [];
-  const exports: Array<ExportExpr> = [];
-
-  function addType(expr: TypeExpr) {
-    const idx = types.length;
-    types.push(expr);
-    return idx;
-  }
-
-  function addFunc(params: Array<Val>, returns: Array<Val>) {
-    const idx = funcs.length;
-    const typeRef = addType([Type.Func, ...vec(params), ...vec(returns)]);
-    funcs.push([typeRef]);
-    return idx;
-  }
-
-  function addExport(name: string, funcRef: number) {
-    const idx = exports.length;
-    exports.push([...encodeString(name), ExportType.func, funcRef]);
-    return idx;
-  }
-
-  const addFuncRef = addFunc([Val.f32, Val.f32], [Val.f32]);
-  addExport("run", addFuncRef);
-
-  const code = [
-    Op.local_get,
-    ...unsignedLEB128(0),
-    Op.local_get,
-    ...unsignedLEB128(1),
-    Op.f32_add,
-  ];
-
-  const codes: Array<CodeExpr> = [];
-  function addCode(t: number[]) {
-    const idx = codes.length;
-    codes.push(t);
-    return idx;
-  }
-  addCode(
-    vec([
+  const $ = emitter();
+  const addFuncType = $.funcType([Val.f32, Val.f32], [Val.f32]);
+  const addRef = $.func(
+    addFuncType,
+    [
       emptyArray, /** locals */
-      ...code,
+      Op.local_get,
+      ...unsignedLEB128(0),
+      Op.local_get,
+      ...unsignedLEB128(1),
+      Op.f32_add,
       Op.end,
-    ]),
+    ],
   );
 
-  return Uint8Array.from([
-    // MAGIC_MODULE_HEADER
-    ...[0x00, 0x61, 0x73, 0x6d],
-    // MODULE_VERSION
-    ...[0x01, 0x00, 0x00, 0x00],
-    // Type Section
-    Section.type,
-    ...vec(vec(types)),
-    // Func Section
-    Section.func,
-    ...vec(vec(funcs)),
-    // Export Section
-    Section.export,
-    ...vec(vec(exports)),
-    // Code Section
-    Section.code,
-    ...vec(
-      vec(codes),
-    ),
-  ]);
+  const idRef = $.func(
+    $.funcType([Val.i32], [Val.i32]),
+    [
+      emptyArray, /** locals */
+      Op.local_get,
+      ...unsignedLEB128(0),
+      Op.end,
+    ],
+  );
+  const nullRef = $.func(
+    $.funcType([], []),
+    [
+      emptyArray, /** locals */
+      Op.end,
+    ],
+  );
+
+  $.export("run", addRef);
+  $.export("id", idRef);
+  $.export("null", nullRef);
+  const logType = $.funcType([Val.i32], []);
+  // $.import("env", "log", logType);
+  // addImport("env", "log", x);
+  // console.log("imports", x);
+  return $.build();
 };
 
 export async function runModule(
@@ -228,4 +284,16 @@ Deno.test("run", async () => {
   const binary = emit();
   const out = await runModule(binary, "run", [4, 2]);
   assert(out === 6, "should be 6");
+});
+
+Deno.test("id", async () => {
+  const binary = emit();
+  const out = await runModule(binary, "id", [1]);
+  assert(out === 1);
+});
+
+Deno.test("null", async () => {
+  const binary = emit();
+  const out = await runModule(binary, "null", []);
+  assert(out === undefined);
 });
