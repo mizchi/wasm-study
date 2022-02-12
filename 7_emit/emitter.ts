@@ -11,7 +11,16 @@ enum Type {
 
 enum Op {
   end = 0x0b,
+  call = 0x10,
+  // https://webassembly.github.io/spec/core/binary/instructions.html
   local_get = 0x20,
+  i32_const = 0x41,
+  i64_const = 0x42,
+  f32_const = 0x43,
+  f64_const = 0x44,
+
+  i32_eq = 0x46,
+  i32_ne = 0x47,
   f32_add = 0x92,
 }
 
@@ -41,8 +50,6 @@ enum Val {
   i32 = 0x7f,
   f32 = 0x7d,
 }
-
-// utils
 
 // https://ja.wikipedia.org/wiki/IEEE_754
 // 浮動小数点に
@@ -138,6 +145,10 @@ function emitter() {
   const _exports: Array<ExportExpr> = [];
   const _codes: Array<CodeExpr> = [];
 
+  // function の index は _funcs.length + _imports.length で決まる
+  // funcs の後に import が来ると、 index がおかしくなるのでロックする
+  let _funcAdded = false;
+
   function _build() {
     return Uint8Array.from([
       // MAGIC_MODULE_HEADER
@@ -182,29 +193,27 @@ function emitter() {
       Section.type
     >;
   }
-
   function _func(typePtr: Ptr<Section.type>, code: CodeExpr) {
-    const ptr = _funcs.length;
+    _funcAdded = true;
+    const ptr = _funcs.length + _imports.length;
     _funcs.push([typePtr]);
     _codes.push(vec(code));
     return ptr as Ptr<Section.func>;
   }
-
   function _export(name: string, funcPtr: Ptr<Section.func>) {
     const idx = _exports.length;
     _exports.push([...encodeString(name), ExportType.func, funcPtr]);
     return idx as Ptr<Section.export>;
   }
-
   function _import(ns: string, name: string, typePtr: Ptr<Section.type>) {
-    const ptr = _imports.length;
+    if (_funcAdded) throw new Error("Can not import: already func added");
     _imports.push([
       ...encodeString(ns),
       ...encodeString(name),
       ExportType.func,
       typePtr,
     ]);
-    return ptr;
+    return _imports.length as Ptr<Section.func>;
   }
   return {
     export: _export,
@@ -218,6 +227,8 @@ function emitter() {
 const emit = () => {
   const $ = emitter();
   const addFuncType = $.funcType([Val.f32, Val.f32], [Val.f32]);
+  const logPtr = $.import("env", "log", $.funcType([Val.i32], []));
+
   const addRef = $.func(
     addFuncType,
     [
@@ -240,21 +251,31 @@ const emit = () => {
       Op.end,
     ],
   );
-  const nullRef = $.func(
-    $.funcType([], []),
+  const printPtr = $.func(
+    $.funcType([Val.i32], []),
     [
       emptyArray, /** locals */
+      // Op
+      Op.i32_const,
+      ...signedLEB128(1),
+      // Op.call,
+      // logPtr,
+      // ...unsignedLEB128(0),
+      // ...unsignedLEB128(1),
+      // Op.call,
+      // logPtr,
+      // ...unsignedLEB128(logPtr),
+      // Op.i32_const,
+      // ...unsignedLEB128(2),
+      // Op.i32_const,
+      // Op.call,
       Op.end,
     ],
   );
 
   $.export("run", addRef);
   $.export("id", idRef);
-  $.export("null", nullRef);
-  const logType = $.funcType([Val.i32], []);
-  // $.import("env", "log", logType);
-  // addImport("env", "log", x);
-  // console.log("imports", x);
+  $.export("print", printPtr);
   return $.build();
 };
 
@@ -280,6 +301,9 @@ export async function runModule(
   return exports[name](...args);
 }
 
+const binary = emit();
+await Deno.writeFile("out.wasm", binary);
+
 Deno.test("run", async () => {
   const binary = emit();
   const out = await runModule(binary, "run", [4, 2]);
@@ -292,8 +316,8 @@ Deno.test("id", async () => {
   assert(out === 1);
 });
 
-Deno.test("null", async () => {
+Deno.test("print", async () => {
   const binary = emit();
-  const out = await runModule(binary, "null", []);
+  const out = await runModule(binary, "print", [1]);
   assert(out === undefined);
 });
