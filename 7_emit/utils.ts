@@ -3,7 +3,7 @@ import {
   equal,
 } from "https://deno.land/std@0.122.0/testing/asserts.ts";
 
-type Binary = number | Binary[];
+export type Binary = number[];
 
 // https://ja.wikipedia.org/wiki/IEEE_754
 // 浮動小数点に
@@ -21,13 +21,19 @@ Deno.test("ieee754", () => {
 
 // https://webassembly.github.io/spec/core/syntax/types.html#vector-types
 // vector は整数、浮動小数点によらない何らかの数値型
-export function vec(data: any): any {
+export function vec(data: Binary | Binary[]): Binary {
   return [
     // データ長
     ...unsignedLEB128(data.length),
-    ...data.flat(Infinity),
+    ...data.flat(4),
   ];
 }
+
+Deno.test("vec", () => {
+  assert(equal(vec([]), [0]));
+  assert(equal(vec([1]), [1, 1]));
+  assert(equal(vec([1, 2, 3]), [3, 1, 2, 3]));
+});
 
 export function unsignedLEB128(n: number): number[] {
   const buffer = [];
@@ -47,15 +53,20 @@ export function unsignedLEB128(n: number): number[] {
 export function signedLEB128(n: number) {
   const buffer = [];
   let byte: number;
+  const isNegative = n < 0;
+  const bitCount = Math.ceil(Math.log2(Math.abs(n))) + 1;
   while (true) {
     byte = n & 0x7f;
-    n >>>= 7;
+    n >>= 7;
+    if (isNegative) {
+      n = n | -(1 << (bitCount - 8));
+    }
     const v = byte & 0x40;
     if (
       // n が 0 で byte で次の bit がないときは終了
       (n === 0 && v === 0) ||
       // オーバーフローしている
-      (n === -1 && v !== 0)
+      (n === -1 && v !== 0x40)
     ) {
       buffer.push(byte);
       return buffer;
