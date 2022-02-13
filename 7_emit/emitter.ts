@@ -2,7 +2,7 @@ import { assert } from "https://deno.land/std@0.122.0/testing/asserts.ts";
 import {
   Binary,
   signedLEB128 as int,
-  unsignedLEB128 as uint,
+  unsignedLEB128 as u32,
   vec,
 } from "./utils.ts";
 
@@ -39,6 +39,7 @@ enum Op {
   i64_const = 0x42,
   f32_const = 0x43,
   f64_const = 0x44,
+  i32_eqz = 0x45,
   i32_eq = 0x46,
   i32_ne = 0x47,
   i32_add = 0x6A,
@@ -68,7 +69,7 @@ enum Section {
 }
 
 // https://webassembly.github.io/spec/core/binary/types.html#binary-numtype
-enum Val {
+enum Valtype {
   externref = 0x6f,
   funcref = 0x70,
   vectype = 0x7b,
@@ -122,20 +123,15 @@ function emitter() {
     return Uint8Array.from(nonFlat.flat());
   }
 
-  const local = (count: number, type: Val) => [
-    ...uint(count),
-    type,
-  ];
-
   function _type(expr: TypeExpr) {
     const idx = _types.length;
     _types.push(expr);
     return idx as Ptr<Section.type>;
   }
 
-  function _fype(
-    params: Array<Val>,
-    results: Array<Val>,
+  function _ftype(
+    params: Array<Valtype>,
+    results: Array<Valtype>,
   ) {
     return _type([
       Type.Func,
@@ -145,10 +141,36 @@ function emitter() {
       Section.type
     >;
   }
-  function _func(typePtr: Ptr<Section.type>, code: Binary) {
+
+  function _func(
+    params: Valtype[],
+    returns: Valtype[],
+    locals: Valtype[],
+    stmts: Array<number | Binary>,
+  ) {
     const ptr = _funcs.length + _imports.length;
+
+    const typePtr = _ftype(params, returns);
     _funcs.push([typePtr]);
-    _codes.push(vec(code).flat(Infinity));
+
+    // local 変数
+    const encoded_locals = locals.map((
+      l,
+      i,
+    ) => [...u32(params.length + i), l]);
+
+    // const blocks: Binary[] = [];
+    function _funcBody(stmts: Array<number | Binary>) {
+      return stmts.flat(Infinity);
+    }
+
+    const encoded_code = [
+      ...vec(encoded_locals),
+      ..._funcBody(stmts),
+      Op.end,
+    ].flat();
+
+    _codes.push(vec(encoded_code));
     return ptr as Ptr<Section.func>;
   }
   function _export(name: string, funcPtr: Ptr<Section.func>) {
@@ -168,22 +190,12 @@ function emitter() {
     return ptr as Ptr<Section.func>;
   }
 
-  function _code(local_idx: number, locals: Val[], stmts: Binary[]) {
-    const encoded_locals = locals.map((l, i) => [...uint(local_idx + i), l]);
-    return [
-      ...vec(encoded_locals),
-      ...stmts,
-      Op.end,
-    ].flat();
-  }
-
   return {
     export: _export,
     import: _import,
     func: _func,
-    funcType: _fype,
     build: _build,
-    code: _code,
+    ftype: _ftype,
   };
 }
 
@@ -205,7 +217,7 @@ function i32_const(n: number): Binary {
 function local_get(local_idx: number): Binary {
   return [
     Op.local_get,
-    ...uint(local_idx),
+    ...u32(local_idx),
   ];
 }
 
@@ -213,19 +225,20 @@ function local_set(local_idx: number, val: Binary): Binary {
   return [
     ...val,
     Op.local_set,
-    ...uint(local_idx),
+    ...u32(local_idx),
   ];
 }
 
 const emit = () => {
   const $ = emitter();
-  const i32_void = $.funcType([Val.i32], []);
-  const i32i32_i32 = $.funcType([Val.i32, Val.i32], [Val.i32]);
+  const i32_void = $.ftype([Valtype.i32], []);
   const logPtr = $.import("env", "log", i32_void);
 
   const add = $.func(
-    i32i32_i32,
-    $.code(2, [], [
+    [Valtype.i32, Valtype.i32],
+    [Valtype.i32],
+    [],
+    [
       i32_add(
         local_get(0),
         i32_add(
@@ -233,43 +246,63 @@ const emit = () => {
           i32_const(5),
         ),
       ),
-    ]),
+    ],
   );
 
   const id = $.func(
-    $.funcType([Val.i32], [Val.i32]),
-    $.code(1, [], [
+    [Valtype.i32],
+    [Valtype.i32],
+    [],
+    [
       local_get(0),
-    ]),
-  );
-
-  const cond = $.func(
-    $.funcType([Val.i32], [Val.i32]),
-    $.code(
-      1,
-      [
-        Val.i32,
-      ],
-      [
-        local_set(1, local_get(0)),
-        local_get(1),
-        // Op.if
-        // i32_const(0),
-        // [Op.if],
-      ],
-    ),
+    ],
   );
 
   const print = $.func(
-    i32_void,
-    $.code(
-      1,
-      [],
-      [
+    [Valtype.i32],
+    [],
+    [],
+    [
+      local_get(0),
+      Op.call,
+      u32(logPtr),
+    ],
+  );
+
+  const cond = $.func(
+    [Valtype.i32],
+    [Valtype.i32],
+    [Valtype.i32],
+    [
+      // if
+      ...[
+        // block: 0
+        Op.block,
+        Blocktype.void,
+        // $0 == 1
         local_get(0),
-        [Op.call, ...uint(logPtr)],
+        Op.i32_eqz,
+        ...[Op.br_if, ...int(0)],
+        // run body
+        local_set(1, i32_const(42)),
+        Op.end,
       ],
-    ),
+      // else
+      ...[
+        // block: 1
+        Op.block,
+        Blocktype.void,
+        // $0 == 1
+        local_get(0),
+        i32_const(1),
+        Op.i32_eq,
+        Op.br_if,
+        int(0),
+        local_set(1, i32_const(0)),
+        Op.end,
+      ],
+      local_get(1),
+    ],
   );
 
   $.export("add", add);
@@ -318,6 +351,9 @@ Deno.test("print", () => {
 
 Deno.test("cond", () => {
   assert(
-    exports.cond(1) === 1,
+    exports.cond(1) === 42,
+  );
+  assert(
+    exports.cond(0) === 0,
   );
 });
