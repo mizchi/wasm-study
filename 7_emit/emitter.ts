@@ -51,6 +51,8 @@ enum Val {
   f32 = 0x7d,
 }
 
+type Binary = number | Binary[];
+
 // https://ja.wikipedia.org/wiki/IEEE_754
 // 浮動小数点に
 export function ieee754(n: number): Uint8Array {
@@ -134,44 +136,41 @@ type TypeExpr = [
   type: Type.Func,
   ...xs: Vec,
 ];
-type FuncExpr = Vec;
-type ExportExpr = Vec;
 type CodeExpr = Vec;
-type ImportExpr = Vec;
 type Ptr<T> = number & { __type__: T };
 
 // AST Builder
 function emitter() {
-  const _types: Array<TypeExpr> = [];
-  const _funcs: Array<FuncExpr> = [];
-  const _imports: Array<ImportExpr> = [];
-  const _exports: Array<ExportExpr> = [];
-  const _codes: Array<CodeExpr> = [];
+  const _types: Binary[] = [];
+  const _funcs: Binary[] = [];
+  const _imports: Binary[] = [];
+  const _exports: Binary[] = [];
+  const _codes: Binary[] = [];
 
   function _build() {
-    return Uint8Array.from([
+    const nonFlat = [
       // MAGIC_MODULE_HEADER
-      ...[0x00, 0x61, 0x73, 0x6d],
+      [0x00, 0x61, 0x73, 0x6d],
       // MODULE_VERSION
-      ...[0x01, 0x00, 0x00, 0x00],
+      [0x01, 0x00, 0x00, 0x00],
       // Type Section
       Section.type,
-      ...vec(vec(_types)),
+      vec(vec(_types)),
       // Import Section
       Section.import,
-      ...vec(vec(_imports)),
+      vec(vec(_imports)),
       // Func Section
       Section.func,
-      ...vec(vec(_funcs)),
+      vec(vec(_funcs)),
       // Export Section
       Section.export,
-      ...vec(vec(_exports)),
+      vec(vec(_exports)),
       // Code Section
       Section.code,
-      ...vec(
-        vec(_codes),
-      ),
-    ]);
+      vec(vec(_codes)),
+    ];
+    // console.log(nonFlat);
+    return Uint8Array.from(nonFlat.flat());
   }
 
   function _addType(expr: TypeExpr) {
