@@ -148,10 +148,6 @@ function emitter() {
   const _exports: Array<ExportExpr> = [];
   const _codes: Array<CodeExpr> = [];
 
-  // function の index は _funcs.length + _imports.length で決まる
-  // funcs の後に import が来ると、 index がおかしくなるのでロックする
-  let _funcAdded = false;
-
   function _build() {
     return Uint8Array.from([
       // MAGIC_MODULE_HEADER
@@ -197,7 +193,6 @@ function emitter() {
     >;
   }
   function _func(typePtr: Ptr<Section.type>, code: CodeExpr) {
-    _funcAdded = true;
     const ptr = _funcs.length + _imports.length;
     _funcs.push([typePtr]);
     _codes.push(vec(code));
@@ -209,7 +204,7 @@ function emitter() {
     return idx as Ptr<Section.export>;
   }
   function _import(ns: string, name: string, typePtr: Ptr<Section.type>) {
-    if (_funcAdded) throw new Error("Can not import: already func added");
+    if (_funcs.length) throw new Error("Can not import: already func added");
     const ptr = _imports.length;
     _imports.push([
       ...encodeString(ns),
