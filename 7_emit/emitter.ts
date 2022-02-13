@@ -65,6 +65,17 @@ Deno.test("ieee754", () => {
   equal(Array.from(out), [0, 0, 128, 63]);
 });
 
+// https://webassembly.github.io/spec/core/syntax/types.html#vector-types
+// vector は整数、浮動小数点によらない何らかの数値型
+function vec(data: any): number[] {
+  return [
+    // データ長
+    ...unsignedLEB128(data.length),
+    // 実体
+    ...data.flat(Infinity),
+  ];
+}
+
 export function unsignedLEB128(n: number): number[] {
   const buffer = [];
   do {
@@ -76,17 +87,6 @@ export function unsignedLEB128(n: number): number[] {
     buffer.push(byte);
   } while (n !== 0);
   return buffer;
-}
-
-// https://webassembly.github.io/spec/core/syntax/types.html#vector-types
-// vector は整数、浮動小数点によらない何らかの数値型
-function vec(data: any): number[] {
-  return [
-    // データ長
-    ...unsignedLEB128(data.length),
-    // 実体
-    ...data.flat(Infinity),
-  ];
 }
 
 type BinaryArray = Array<number | BinaryArray | Uint8Array>;
@@ -121,6 +121,9 @@ Deno.test("signedLEB128", () => {
   assert(equal(signedLEB128(63), [63]));
   assert(equal(signedLEB128(64), [192, 0]));
 });
+
+const uint = unsignedLEB128;
+const int = signedLEB128;
 
 export function encodeString(str: string): number[] {
   return [str.length, ...Array.from(str).map((s) => s.charCodeAt(0))];
@@ -207,13 +210,14 @@ function emitter() {
   }
   function _import(ns: string, name: string, typePtr: Ptr<Section.type>) {
     if (_funcAdded) throw new Error("Can not import: already func added");
+    const ptr = _imports.length;
     _imports.push([
       ...encodeString(ns),
       ...encodeString(name),
       ExportType.func,
       typePtr,
     ]);
-    return _imports.length as Ptr<Section.func>;
+    return ptr as Ptr<Section.func>;
   }
   return {
     export: _export,
@@ -234,9 +238,9 @@ const emit = () => {
     [
       emptyArray, /** locals */
       Op.local_get,
-      ...unsignedLEB128(0),
+      ...uint(0),
       Op.local_get,
-      ...unsignedLEB128(1),
+      ...uint(1),
       Op.f32_add,
       Op.end,
     ],
@@ -247,7 +251,7 @@ const emit = () => {
     [
       emptyArray, /** locals */
       Op.local_get,
-      ...unsignedLEB128(0),
+      ...uint(0),
       Op.end,
     ],
   );
@@ -255,20 +259,10 @@ const emit = () => {
     $.funcType([Val.i32], []),
     [
       emptyArray, /** locals */
-      // Op
-      Op.i32_const,
-      ...signedLEB128(1),
-      // Op.call,
-      // logPtr,
-      // ...unsignedLEB128(0),
-      // ...unsignedLEB128(1),
-      // Op.call,
-      // logPtr,
-      // ...unsignedLEB128(logPtr),
-      // Op.i32_const,
-      // ...unsignedLEB128(2),
-      // Op.i32_const,
-      // Op.call,
+      Op.local_get,
+      ...int(0),
+      Op.call,
+      ...uint(logPtr),
       Op.end,
     ],
   );
