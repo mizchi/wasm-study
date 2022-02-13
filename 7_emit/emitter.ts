@@ -268,10 +268,8 @@ const emit = () => {
   return $.build();
 };
 
-export async function runModule(
+export async function compile(
   binary: Uint8Array,
-  name: string,
-  args: number[],
 ) {
   const memory = new WebAssembly.Memory({ initial: 1 });
   const imports: WebAssembly.Imports = {
@@ -282,31 +280,25 @@ export async function runModule(
       },
     },
   };
-
   const ret = await WebAssembly.instantiate(binary, imports);
-  const exports = ret.instance.exports as {
+  return ret.instance.exports as {
     [key: string]: (...args: number[]) => number;
   };
-  return exports[name](...args);
 }
 
-const binary = emit();
-await Deno.writeFile("out.wasm", binary);
+// const binary = emit();
+// await Deno.writeFile("out.wasm", binary);
 
-Deno.test("run", async () => {
-  const binary = emit();
-  const out = await runModule(binary, "run", [4, 2]);
-  assert(out === 6, "should be 6");
+const exports = await compile(emit());
+
+Deno.test("run", () => {
+  assert(exports.run(4, 2) === 6, "should be 6");
 });
 
-Deno.test("id", async () => {
-  const binary = emit();
-  const out = await runModule(binary, "id", [1]);
-  assert(out === 1);
+Deno.test("id", () => {
+  assert(exports.id(1) === 1);
 });
 
-Deno.test("print", async () => {
-  const binary = emit();
-  const out = await runModule(binary, "print", [1]);
-  assert(out === undefined);
+Deno.test("print", () => {
+  exports.print(4);
 });
