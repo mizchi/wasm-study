@@ -269,39 +269,104 @@ const emit = () => {
     ],
   );
 
+  // function $if(expr: Binary, then: Binary, else_: Binary) {
+  //   return [
+  //     ...expr,
+  //     Op.if,
+  //     ...then,
+  //     Op.else,
+  //     ...else_,
+  //     Op.end,
+  //   ];
+  // }
+  // function $if(
+  //   expr: [op: Op.local_get, ...u32: number[]],
+  //   then: Binary,
+  //   else_?: Binary,
+  // ) {
+  //   return [
+  // ...[
+  //   Op.block,
+  //   Blocktype.void,
+  //   ...expr,
+  //   Op.i32_eqz,
+  //   ...[Op.br_if, ...int(0)],
+  //   ...then,
+  //   Op.end,
+  // ],
+  // // else
+  // ...else_
+  //   ? [
+  //     Op.block,
+  //     Blocktype.void,
+  //     ...expr,
+  //     i32_const(1),
+  //     Op.i32_eq,
+  //     Op.br_if,
+  //     int(0),
+  //     local_set(1, i32_const(0)),
+  //     Op.end,
+  //   ]
+  //   : [],
+  //   ];
+  // }
+
+  const $if = (i32_expr: Binary, then_: Binary[], else_: Binary[]) => {
+    return [
+      ...i32_expr,
+      Op.if,
+      Valtype.i32,
+      ...else_,
+      Op.else,
+      ...then_,
+      Op.end,
+    ];
+  };
   const cond = $.func(
     [Valtype.i32],
     [Valtype.i32],
     [Valtype.i32],
     [
+      ...$if(
+        [
+          ...local_get(0),
+          Op.i32_eqz,
+        ],
+        [
+          i32_const(42),
+        ],
+        [
+          i32_const(0),
+        ],
+      ),
       // if
-      ...[
-        // block: 0
-        Op.block,
-        Blocktype.void,
-        // $0 == 1
-        local_get(0),
-        Op.i32_eqz,
-        ...[Op.br_if, ...int(0)],
-        // run body
-        local_set(1, i32_const(42)),
-        Op.end,
-      ],
-      // else
-      ...[
-        // block: 1
-        Op.block,
-        Blocktype.void,
-        // $0 == 1
-        local_get(0),
-        i32_const(1),
-        Op.i32_eq,
-        Op.br_if,
-        int(0),
-        local_set(1, i32_const(0)),
-        Op.end,
-      ],
-      local_get(1),
+      // ...[
+      //   // block: 0
+      //   Op.block,
+      //   Blocktype.void,
+      //   // $0 == 1
+      //   local_get(0),
+      //   Op.i32_eqz,
+      //   ...[Op.br_if, ...int(0)],
+      //   // run body
+      //   local_set(1, i32_const(42)),
+      //   Op.end,
+      // ],
+      // // else
+      // ...[
+      //   // block: 1
+      //   Op.block,
+      //   Blocktype.void,
+      //   // $0 == 1
+      //   local_get(0),
+      //   i32_const(1),
+      //   Op.i32_eq,
+      //   Op.br_if,
+      //   int(0),
+      //   local_set(1, i32_const(0)),
+      //   Op.end,
+      // ],
+      // local_get(1),
     ],
   );
 
@@ -350,6 +415,7 @@ Deno.test("print", () => {
 });
 
 Deno.test("cond", () => {
+  console.log(exports.cond(0));
   assert(
     exports.cond(1) === 42,
   );
