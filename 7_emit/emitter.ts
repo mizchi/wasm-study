@@ -1,12 +1,13 @@
-import { assert } from "https://deno.land/std@0.122.0/testing/asserts.ts";
+import {
+  assert,
+  equal,
+} from "https://deno.land/std@0.122.0/testing/asserts.ts";
 import {
   Binary,
   signedLEB128 as int,
   unsignedLEB128 as u32,
   vec,
 } from "./utils.ts";
-
-const emptyArray = 0x0;
 
 enum Type {
   Func = 0x60,
@@ -42,6 +43,19 @@ enum Op {
   i32_eqz = 0x45,
   i32_eq = 0x46,
   i32_ne = 0x47,
+  // lt int
+  i32_lt_s = 0x48,
+  // lt uint
+  i32_lt_u = 0x49,
+  // le(>=) int
+  i32_le_s = 0x4c,
+
+  i32_gt_s = 0x4a,
+  i32_gt_u = 0x4b,
+  i32_ge_s = 0x4e,
+  i32_ge_u = 0x4f,
+
+  i32_gt = 0x5E,
   i32_add = 0x6A,
   f32_add = 0x92,
 }
@@ -88,6 +102,10 @@ type TypeExpr = [
   type: Type.Func,
   ...xs: Vec,
 ];
+type InstrCtx = {
+  local(type: Valtype): number;
+};
+
 type Ptr<T> = number & { __type__: T };
 
 // AST Builder
@@ -99,7 +117,7 @@ function emitter() {
   const _codes: Binary[] = [];
 
   function _build() {
-    const nonFlat = [
+    const binary = [
       // MAGIC_MODULE_HEADER
       [0x00, 0x61, 0x73, 0x6d],
       // MODULE_VERSION
@@ -120,7 +138,7 @@ function emitter() {
       Section.code,
       vec(vec(_codes)),
     ] as Binary;
-    return Uint8Array.from(nonFlat.flat());
+    return Uint8Array.from(binary.flat());
   }
 
   function _type(expr: TypeExpr) {
@@ -129,7 +147,7 @@ function emitter() {
     return idx as Ptr<Section.type>;
   }
 
-  function _ftype(
+  function ftype(
     params: Array<Valtype>,
     results: Array<Valtype>,
   ) {
@@ -141,44 +159,61 @@ function emitter() {
       Section.type
     >;
   }
+  function _instr(stmts: Array<number | Binary>, _depth: number) {
+    // TODO
+    return stmts.flat(Infinity);
+  }
 
-  function _func(
+  function call(funcPtr: Ptr<Section.func>, args: Binary[]): Binary {
+    return [
+      ...args,
+      Op.call,
+      u32(funcPtr),
+    ].flat();
+  }
+
+  function func(
     params: Valtype[],
     returns: Valtype[],
-    locals: Valtype[],
-    stmts: Array<number | Binary>,
+    stmtsBuilder: (
+      ctx: InstrCtx,
+      depth: number,
+    ) => Array<number | Binary>,
   ) {
     const ptr = _funcs.length + _imports.length;
-
-    const typePtr = _ftype(params, returns);
+    const typePtr = ftype(params, returns);
     _funcs.push([typePtr]);
 
-    // local 変数
-    const encoded_locals = locals.map((
-      l,
-      i,
-    ) => [...u32(params.length + i), l]);
+    const _locals: Valtype[] = [];
 
-    // const blocks: Binary[] = [];
-    function _funcBody(stmts: Array<number | Binary>) {
-      return stmts.flat(Infinity);
-    }
+    const ctx: InstrCtx = {
+      local(type: Valtype) {
+        const idx = _locals.length;
+        _locals.push(type);
+        return (idx + params.length) as Ptr<number>;
+      },
+    };
 
-    const encoded_code = [
-      ...vec(encoded_locals),
-      ..._funcBody(stmts),
+    const body = _instr(stmtsBuilder(ctx, 0), 0).flat(1);
+    _codes.push(vec([
+      ...vec(
+        // encode locals
+        _locals.map((
+          local,
+          idx,
+        ) => [...u32(params.length + idx), local]),
+      ).flat(),
+      ...body,
       Op.end,
-    ].flat();
-
-    _codes.push(vec(encoded_code));
+    ]));
     return ptr as Ptr<Section.func>;
   }
-  function _export(name: string, funcPtr: Ptr<Section.func>) {
+  function export_(name: string, funcPtr: Ptr<Section.func>) {
     const idx = _exports.length;
     _exports.push([...encodeString(name), ExportType.func, funcPtr]);
     return idx as Ptr<Section.export>;
   }
-  function _import(ns: string, name: string, typePtr: Ptr<Section.type>) {
+  function import_(ns: string, name: string, typePtr: Ptr<Section.type>) {
     if (_funcs.length) throw new Error("Can not import: already func added");
     const ptr = _imports.length;
     _imports.push([
@@ -190,12 +225,26 @@ function emitter() {
     return ptr as Ptr<Section.func>;
   }
 
+  const if_ = (i32_expr: Binary, then_: Binary[], else_: Binary[]) => {
+    return [
+      ...i32_expr,
+      Op.if,
+      Valtype.i32,
+      ...else_,
+      Op.else,
+      ...then_,
+      Op.end,
+    ];
+  };
+
   return {
-    export: _export,
-    import: _import,
-    func: _func,
+    export: export_,
+    import: import_,
+    if: if_,
+    func: func,
     build: _build,
-    ftype: _ftype,
+    ftype: ftype,
+    call,
   };
 }
 
@@ -237,8 +286,7 @@ const emit = () => {
   const add = $.func(
     [Valtype.i32, Valtype.i32],
     [Valtype.i32],
-    [],
-    [
+    () => [
       i32_add(
         local_get(0),
         i32_add(
@@ -252,82 +300,36 @@ const emit = () => {
   const id = $.func(
     [Valtype.i32],
     [Valtype.i32],
-    [],
-    [
+    () => [
       local_get(0),
     ],
+  );
+
+  const localVar = $.func(
+    [Valtype.i32],
+    [Valtype.i32],
+    (ctx) => {
+      const localVal = ctx.local(Valtype.i32);
+      return [
+        local_set(localVal, i32_const(11)),
+        local_get(localVal),
+      ];
+    },
   );
 
   const print = $.func(
     [Valtype.i32],
     [],
-    [],
-    [
-      local_get(0),
-      Op.call,
-      u32(logPtr),
+    () => [
+      $.call(logPtr, [local_get(0)]),
     ],
   );
 
-  // function $if(expr: Binary, then: Binary, else_: Binary) {
-  //   return [
-  //     ...expr,
-  //     Op.if,
-  //     ...then,
-  //     Op.else,
-  //     ...else_,
-  //     Op.end,
-  //   ];
-  // }
-  // function $if(
-  //   expr: [op: Op.local_get, ...u32: number[]],
-  //   then: Binary,
-  //   else_?: Binary,
-  // ) {
-  //   return [
-  // ...[
-  //   Op.block,
-  //   Blocktype.void,
-  //   ...expr,
-  //   Op.i32_eqz,
-  //   ...[Op.br_if, ...int(0)],
-  //   ...then,
-  //   Op.end,
-  // ],
-  // // else
-  // ...else_
-  //   ? [
-  //     Op.block,
-  //     Blocktype.void,
-  //     ...expr,
-  //     i32_const(1),
-  //     Op.i32_eq,
-  //     Op.br_if,
-  //     int(0),
-  //     local_set(1, i32_const(0)),
-  //     Op.end,
-  //   ]
-  //   : [],
-  //   ];
-  // }
-
-  const $if = (i32_expr: Binary, then_: Binary[], else_: Binary[]) => {
-    return [
-      ...i32_expr,
-      Op.if,
-      Valtype.i32,
-      ...else_,
-      Op.else,
-      ...then_,
-      Op.end,
-    ];
-  };
   const cond = $.func(
     [Valtype.i32],
     [Valtype.i32],
-    [Valtype.i32],
-    [
-      ...$if(
+    () => [
+      ...$.if(
         [
           ...local_get(0),
           Op.i32_eqz,
@@ -339,41 +341,61 @@ const emit = () => {
           i32_const(0),
         ],
       ),
-      // if
-      // ...[
-      //   // block: 0
-      //   Op.block,
-      //   Blocktype.void,
-      //   // $0 == 1
-      //   local_get(0),
-      //   Op.i32_eqz,
-      //   ...[Op.br_if, ...int(0)],
-      //   // run body
-      //   local_set(1, i32_const(42)),
-      //   Op.end,
-      // ],
-      // // else
-      // ...[
-      //   // block: 1
-      //   Op.block,
-      //   Blocktype.void,
-      //   // $0 == 1
-      //   local_get(0),
-      //   i32_const(1),
-      //   Op.i32_eq,
-      //   Op.br_if,
-      //   int(0),
-      //   local_set(1, i32_const(0)),
-      //   Op.end,
-      // ],
-      // local_get(1),
     ],
+  );
+
+  const while_ = (expr: Binary, stmts: Binary[]) => {
+    return [];
+  };
+
+  const loop = $.func(
+    [Valtype.i32],
+    [Valtype.i32],
+    (ctx, _depth) => {
+      // const $sum = ctx.local(Valtype.i32);
+      let $sum = 0;
+      return [
+        // sum = 0;
+        local_set($sum, i32_const(0)),
+        // 0: continue block
+        Op.loop,
+        Blocktype.void,
+        // 1: break block
+        Op.block,
+        Blocktype.void,
+        // expression
+        // break if sum > 10
+        i32_const(10),
+        local_get($sum),
+        // sum <= 10
+        Op.i32_ge_s,
+        // break
+        Op.br_if,
+        u32(1),
+        Op.end,
+        // while body
+        // sum = sum + 1
+        local_get($sum),
+        Op.i32_const,
+        ...int(1),
+        Op.i32_add,
+        Op.local_set,
+        u32($sum),
+        $.call(logPtr, [local_get($sum)]),
+        ...[Op.br, u32(0)],
+        Op.end,
+        $.call(logPtr, [local_get($sum)]),
+        ...local_get($sum),
+      ];
+    },
   );
 
   $.export("add", add);
   $.export("id", id);
   $.export("print", print);
   $.export("cond", cond);
+  $.export("localVar", localVar);
+  $.export("loop", loop);
 
   return $.build();
 };
@@ -410,16 +432,33 @@ Deno.test("id", () => {
   assert(exports.id(1) === 1);
 });
 
+Deno.test("localVar", () => {
+  assert(exports.localVar() === 11);
+});
+
 Deno.test("print", () => {
   exports.print(4);
 });
 
 Deno.test("cond", () => {
-  console.log(exports.cond(0));
+  // console.log(exports.cond(0));
   assert(
     exports.cond(1) === 42,
   );
   assert(
     exports.cond(0) === 0,
   );
+});
+
+Deno.test("myloop", () => {
+  try {
+    // console.log("---------------~~~~~~~~~~~~~~~~", exports.loop(1));
+    // console.log("=============================loop", exports.loop(7));
+    assert(
+      equal(exports.loop(7), 10),
+    );
+  } catch (err) {
+    console.error(err);
+    throw err;
+  }
 });

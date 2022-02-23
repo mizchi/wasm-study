@@ -5,7 +5,7 @@
   "deno.unstable": true,
   "[typescript]": {
     "editor.formatOnSave": true,
-    "editor.defaultFormatter": "denoland.vscode-deno"
+    "editor.defaultFormatter": "vscode.typescript-language-features"
   },
   "[wat]": {
     "editor.formatOnSave": true,

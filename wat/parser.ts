@@ -1,110 +1,6 @@
-import { Node, ParenNode, SyntaxType, Token } from "./types.ts";
+import { Node, ParenNode, Program, SyntaxType, Token, WhitespaceNode } from "./types.ts";
 
-const TOKENS = ["\"", "(", ")"];
-const SKIP = [" ", "\n"];
-const RESERVED = [...TOKENS, ...SKIP]
-
-enum Mode {
-  char,
-  string,
-  comment
-}
-
-export function tokenize(input: string): Token[] {
-  const chars = Array.from(input);
-  const size = chars.length;
-  // state
-  let mode = Mode.char as Mode;
-  const tokens: Array<Token> = [];
-  let _buf: string[] = [];
-  let start = 0;
-  let end = 0;
-  let stack = 0;
-
-  const eat = () => {
-    if (_buf.length > 0) {
-      tokens.push({ raw: _buf.join(""), d: stack, pos: [start, end] });
-      _buf.length = 0;
-    }
-  }
-  const push_single_token = (char: string, idx: number) => {
-    if (_buf.length) throw new Error("queue is not empty");
-    tokens.push({ raw: char, d: stack, pos: [idx, idx + char.length] });
-  }
-
-  const push_char = (char: string, idx: number) => {
-    if (_buf.length === 0) {
-      start = idx;
-    } else {
-      end = idx;
-    }
-    _buf.push(char);
-  }
-
-  for (let cur = 0; cur < size; cur++) {
-    const char = chars[cur];
-    switch (mode) {
-      case Mode.comment: {
-        if (chars[cur - 1] !== '\\' && char === '\n') {
-          eat();
-          mode = Mode.char;
-          continue;
-        }
-        push_char(char, cur);
-        continue;
-      }
-      case Mode.string: {
-        if (chars[cur - 1] !== '\\' && char === '"') {
-          mode = Mode.char;
-          push_char(char, cur);
-          eat();
-          continue;
-        } else {
-          push_char(char, cur);
-        }
-        continue;
-      }
-      case Mode.char: {
-        // enter comment mode
-        if (char === ';' && chars[cur + 1] === ';') {
-          push_char(char, cur);
-          mode = Mode.comment;
-          continue;
-        }
-        // enter string mode
-        if (char === '"') {
-          eat();
-          push_char(char, cur);
-          mode = Mode.string;
-          continue;
-        }
-        if (SKIP.includes(char)) {
-          eat();
-          continue;
-        }
-        if (RESERVED.includes(char)) {
-          eat();
-          push_single_token(char, cur);
-          if (char === "(") {
-            stack++;
-          }
-          if (char === ")") {
-            stack--;
-          }
-          continue;
-        }
-        push_char(char, cur);
-        continue;
-      }
-    }
-  }
-  return tokens;
-}
-
-const MAX_WHOLE_LINE = 120;
-const MAX_LINE = 50;
-
-export function parse(tokens: Token[]): Node {
+export function parse(tokens: Token[]): Program {
   // let nid = 0;
   const _parse = (tokens: Token[], cur: number = 0, depth: number = 0): [nodes: Node[], cur: number] => {
     let nodes: Node[] = [];
@@ -118,13 +14,38 @@ export function parse(tokens: Token[]): Node {
       }
       if (raw === '(') {
         const [children, next] = _parse(tokens, i + 1, depth + 1);
+        const start = children.at(0)!;
+        const end = children.at(-1)!;
         nodes.push({
           t: SyntaxType.Paren,
           depth: depth,
           children: children,
-        } as any);
+          pos: [start.pos[0], end.pos[1]],
+          tpos: [i + 1, next],
+        });
         // skip to next
         i = next;
+        continue;
+      }
+      if (tokens[i].t) {
+        switch (tokens[i].t) {
+          case SyntaxType.WhiteSpace: {
+            nodes.push({
+              t: SyntaxType.WhiteSpace,
+              raw: raw,
+              pos: tokens[i].pos,
+            });
+            break;
+          }
+          case SyntaxType.NewLine: {
+            nodes.push({
+              t: SyntaxType.NewLine,
+              raw: raw,
+              pos: tokens[i].pos,
+            });
+            break;
+          }
+        }
         continue;
       }
       const isNum = /^\d+$/.test(raw);
@@ -142,13 +63,13 @@ export function parse(tokens: Token[]): Node {
       }
     }
     return [nodes, i];
+    // }
   }
   const [rootNodes, end] = _parse(tokens, 0, 0);
-
   return {
     t: SyntaxType.Program,
     children: rootNodes as ParenNode[],
     pos: [0, tokens.at(-1)!.pos[1]],
     tpos: [0, end],
-  }
+  } as Program;
 }
